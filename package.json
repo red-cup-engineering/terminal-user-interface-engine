@@ -1,0 +1,26 @@
+{
+  "name": "@red-cup-engineering/terminal-user-interface-engine",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "The terminal session boundary: lifecycle, normalized input, terminal capability observation, and byte output.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test tests/prove-*.mjs"
+  },
+  "exports": {
+    ".": {
+      "default": "./src/terminal.mjs"
+    },
+    "./terminal": {
+      "default": "./src/terminal.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "sideEffects": false
+}
