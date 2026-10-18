@@ -3,6 +3,11 @@
   "version": "0.1.1",
   "type": "module",
   "description": "The terminal session boundary: lifecycle, normalized input, terminal capability observation, and byte output.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/red-cup-engineering/computer-systems-engineering-services-section.git",
+    "directory": "services/computer-interface-system-services-section/services/terminal-computer-interface-system-engineering-services-section/services/terminal-user-interface-engine"
+  },
   "engines": {
     "node": ">=20"
   },
