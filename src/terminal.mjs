@@ -69,29 +69,57 @@ export function parseKey(seq) {
   return key("unknown", { raw });
 }
 
-// splitKeys(s) — preserve one escape sequence as one event while keeping typed text incremental.
-export function splitKeys(s) {
+// Read a VT key stream without assuming that a terminal emits each escape sequence in one
+// data event. A CSI or lone ESC at the end remains pending until another chunk arrives or the
+// keyboard's short escape settling window elapses. The public splitKeys() still finalizes a
+// complete string synchronously; both paths use precisely this same scanner.
+function scanKeys(s, final) {
   const keys = [];
   let index = 0;
   while (index < s.length) {
     if (s[index] !== ESC) {
-      keys.push(s[index]);
-      index += 1;
+      const point = s.codePointAt(index);
+      const length = point > 0xffff ? 2 : 1;
+      // Preserve a supplementary Unicode character when its UTF-16 halves arrive separately.
+      if (!final && length === 1 && point >= 0xd800 && point <= 0xdbff && index + 1 === s.length) break;
+      keys.push(s.slice(index, index + length));
+      index += length;
       continue;
     }
-    let end = index + 1;
-    if (s[end] === "[" || s[end] === "O") {
-      end += 1;
-      while (end < s.length && !/[A-Za-z~]/.test(s[end])) end += 1;
-      if (end < s.length) end += 1;
-    } else if (end < s.length) {
-      end += 1;
+
+    const second = s[index + 1];
+    if (second === undefined) {
+      if (!final) break; // lone ESC may be the start of an arrow or meta sequence
+      keys.push(ESC);
+      index++;
+      continue;
     }
-    keys.push(s.slice(index, end));
-    index = end;
+
+    if (second === "[" || second === "O") {
+      let end = index + 2;
+      while (end < s.length && !/[A-Za-z~]/u.test(s[end])) end++;
+      if (end === s.length && !final) break;
+      if (end < s.length) end++;
+      keys.push(s.slice(index, end));
+      index = end;
+      continue;
+    }
+
+    // Meta + a Unicode code point; a split surrogate pair must not become two keys.
+    const point = s.codePointAt(index + 1);
+    const length = point > 0xffff ? 2 : 1;
+    if (!final && length === 1 && point >= 0xd800 && point <= 0xdbff && index + 2 === s.length) break;
+    keys.push(s.slice(index, index + 1 + length));
+    index += 1 + length;
   }
-  return keys;
+  return { keys, pending: s.slice(index) };
 }
+
+export function splitKeys(s) {
+  return scanKeys(s, true).keys;
+}
+
+const ESCAPE_SETTLE_MS = 40;
 
 // Keyboard — reversible raw-mode adapter that emits normalized key and interrupt events.
 export class Keyboard extends EventEmitter {
@@ -99,22 +127,49 @@ export class Keyboard extends EventEmitter {
     super();
     this.stream = stream;
     this._started = false;
-    this._onData = (chunk) => {
-      for (const sequence of splitKeys(String(chunk))) {
+    this._pending = "";
+    this._pendingTimer = null;
+    this._emitSequences = (sequences) => {
+      for (const sequence of sequences) {
         const event = parseKey(sequence);
         this.emit("key", event);
         if (event.name === "char" && event.ctrl && event.char === "c") this.emit("interrupt", event);
+      }
+    };
+    this._flushPending = () => {
+      if (!this._pending) return;
+      const { keys } = scanKeys(this._pending, true);
+      this._pending = "";
+      this._emitSequences(keys);
+    };
+    this._onData = (chunk) => {
+      if (this._pendingTimer) {
+        clearTimeout(this._pendingTimer);
+        this._pendingTimer = null;
+      }
+      const { keys, pending } = scanKeys(this._pending + String(chunk), false);
+      this._pending = pending;
+      this._emitSequences(keys);
+      if (this._pending) {
+        // A bare Escape key must still be usable on its own. The settling window gives a
+        // multi-chunk arrow/Meta key time to complete, then emits an honest Escape/unknown.
+        this._pendingTimer = setTimeout(() => {
+          this._pendingTimer = null;
+          this._flushPending();
+        }, ESCAPE_SETTLE_MS);
+        this._pendingTimer.unref?.();
       }
     };
   }
 
   start() {
     if (this._started) return this;
-    this._started = true;
     if (this.stream.isTTY && this.stream.setRawMode) this.stream.setRawMode(true);
-    this.stream.resume?.();
+    // Attach before resuming: a synchronous producer must not lose its first data event.
     this.stream.setEncoding?.("utf8");
     this.stream.on?.("data", this._onData);
+    this._started = true;
+    this.stream.resume?.();
     return this;
   }
 
@@ -122,6 +177,11 @@ export class Keyboard extends EventEmitter {
     if (!this._started) return this;
     this._started = false;
     this.stream.off?.("data", this._onData);
+    if (this._pendingTimer) {
+      clearTimeout(this._pendingTimer);
+      this._pendingTimer = null;
+    }
+    this._flushPending();
     if (this.stream.isTTY && this.stream.setRawMode) this.stream.setRawMode(false);
     this.stream.pause?.();
     return this;
