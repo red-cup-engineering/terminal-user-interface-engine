@@ -27,5 +27,10 @@
     "README.md"
   ],
   "sideEffects": false,
-  "private": false
+  "private": false,
+  "license": "MIT",
+  "funding": {
+    "type": "individual",
+    "url": "https://github.com/561-group/.github/blob/main/TIPS.md"
+  }
 }
